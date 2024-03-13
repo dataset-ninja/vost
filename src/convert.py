@@ -1,8 +1,13 @@
 import os
 import shutil
 
+import numpy as np
 import supervisely as sly
+from cv2 import connectedComponents
+from dataset_tools.convert import unpack_if_archive
+from supervisely.imaging.color import get_predefined_colors
 from supervisely.io.fs import (
+    dir_exists,
     file_exists,
     get_file_name,
     get_file_name_with_ext,
@@ -11,7 +16,6 @@ from supervisely.io.fs import (
 from tqdm import tqdm
 
 import src.settings as s
-from dataset_tools.convert import unpack_if_archive
 
 
 def convert_and_upload_supervisely_project(
@@ -19,72 +23,106 @@ def convert_and_upload_supervisely_project(
 ) -> sly.ProjectInfo:
     # Possible structure for bbox case. Feel free to modify as you needs.
 
-    root_path = ""
-    images_folder = "images"
-    bboxes_folder = "labels"
+    images_path = "/home/alex/DATASETS/TODO/VOST/JPEGImages"
+    split_path = "/home/alex/DATASETS/TODO/VOST/ImageSets"
     batch_size = 30
-    img_ext = ".png"
-    ann_ext = ".txt"
+
+    def get_unique_colors(img):
+        unique_colors = []
+        img = img.astype(np.int32)
+        h, w = img.shape[:2]
+        colhash = img[:, :, 0] * 256 * 256 + img[:, :, 1] * 256 + img[:, :, 2]
+        unq, unq_inv, unq_cnt = np.unique(colhash, return_inverse=True, return_counts=True)
+        indxs = np.split(np.argsort(unq_inv), np.cumsum(unq_cnt[:-1]))
+        col2indx = {unq[i]: indxs[i][0] for i in range(len(unq))}
+        for col, indx in col2indx.items():
+            unique_colors.append((col // (256**2), (col // 256) % 256, col % 256))
+
+        return unique_colors
 
     def create_ann(image_path):
-        labels, img_tags, label_tags = [], [], []
+        labels = []
 
-        image_np = sly.imaging.image.read(image_path)[:, :, 0]
-        img_height = image_np.shape[0]
-        img_width = image_np.shape[1]
+        mask_path = image_path.replace("JPEGImages", "Annotations").replace(".jpg", ".png")
 
-        file_name = get_file_name(image_path)
-        curr_anns_dirpath = ""
-        ann_path = os.path.join(curr_anns_dirpath, file_name + ann_ext)
+        seq_id, action_val, class_name = image_path.split("/")[-2].split("_")
 
-        if file_exists(ann_path):
-            with open(ann_path) as f:
-                content = f.read().split("\n")
-                for curr_data in content:
-                    if len(curr_data) != 0:
-                        curr_data = list(map(float, curr_data.split(" ")))
+        action = sly.Tag(action_meta, value=action_val)
+        seq = sly.Tag(seq_meta, value=int(seq_id))
+        obj_class = meta.get_obj_class(class_name)
 
-                        left = int((curr_data[1] - curr_data[3] / 2) * img_width)
-                        right = int((curr_data[1] + curr_data[3] / 2) * img_width)
-                        top = int((curr_data[2] - curr_data[4] / 2) * img_height)
-                        bottom = int((curr_data[2] + curr_data[4] / 2) * img_height)
+        mask_np = sly.imaging.image.read(mask_path)
+        img_height = mask_np.shape[0]
+        img_wight = mask_np.shape[1]
+        unique_colors = get_unique_colors(mask_np)
+        for color in unique_colors[1:]:
+            mask = np.all(mask_np == color, axis=2)
+            ret, curr_mask = connectedComponents(mask.astype("uint8"), connectivity=8)
+            for i in range(1, ret):
+                obj_mask = curr_mask == i
+                curr_bitmap = sly.Bitmap(obj_mask)
+                if curr_bitmap.area > 25:
+                    curr_label = sly.Label(curr_bitmap, obj_class)
+                    labels.append(curr_label)
 
-                        rectangle = sly.Rectangle(top=top, left=left, bottom=bottom, right=right)
-
-                        for obj_class in obj_classes:
-                            if obj_class.name == idx2clsname[curr_data[0]]:
-                                curr_obj_class = obj_class
-                                break
-                        label = sly.Label(rectangle, curr_obj_class, label_tags)
-                        labels.append(label)
-
-        return sly.Annotation(img_size=(img_height, img_width), labels=labels, img_tags=img_tags)
-
-    class_names = ["class1", "class2", ...]
-    idx2clsname = {}
-    obj_classes = [sly.ObjClass(name, sly.Rectangle) for name in class_names]
+        return sly.Annotation(
+            img_size=(img_height, img_wight), labels=labels, img_tags=[action, seq]
+        )
 
     project = api.project.create(workspace_id, project_name, change_name_if_conflict=True)
-    meta = sly.ProjectMeta(obj_classes=obj_classes)
+
+    classes_names = []
+    for folder in os.listdir(images_path):
+        if folder.split("_")[-1] not in classes_names:
+            classes_names.append(folder.split("_")[-1])
+
+    obj_classes = [
+        sly.ObjClass(name, sly.Bitmap, color)
+        for name, color in zip(classes_names, get_predefined_colors(len(classes_names)))
+    ]
+
+    action_meta = sly.TagMeta("action", sly.TagValueType.ANY_STRING)
+    seq_meta = sly.TagMeta("sequence", sly.TagValueType.ANY_NUMBER)
+
+    meta = sly.ProjectMeta(tag_metas=[action_meta, seq_meta], obj_classes=obj_classes)
+
     api.project.update_meta(project.id, meta.to_json())
 
-    for ds_name in os.listdir(root_path):
+    for split in os.listdir(split_path):
+        ds_name = get_file_name(split)
+        if ds_name == "test":
+            continue
+
         dataset = api.dataset.create(project.id, ds_name, change_name_if_conflict=True)
-        dataset_path = os.path.join(root_path, ds_name)
 
-        images_pathes = sly.fs.list_files_recursively(dataset_path, valid_extensions=[img_ext])
+        curr_split_path = os.path.join(split_path, split)
 
-        pbar = tqdm(desc=f"Create dataset '{ds_name}'", total=len(images_pathes))
-        for images_pathes_batch in sly.batched(images_pathes, batch_size=batch_size):
-            images_names_batch = [
-                get_file_name_with_ext(image_path) for image_path in images_pathes_batch
-            ]
+        with open(curr_split_path) as f:
+            folders = f.read().split("\n")
 
-            img_infos = api.image.upload_paths(dataset.id, images_names_batch, images_pathes_batch)
-            img_ids = [image.id for image in img_infos]
+        for folder in folders:
+            if len(folder) > 1:
+                curr_images_path = os.path.join(images_path, folder)
+                if dir_exists(curr_images_path):
+                    images_names = os.listdir(curr_images_path)
 
-            anns = [create_ann(image_path) for image_path in images_pathes_batch]
-            api.annotation.upload_anns(img_ids, anns)
+                    progress = sly.Progress("Create dataset {}".format(ds_name), len(images_names))
 
-            pbar.update(len(images_names_batch))
+                    for images_names_batch in sly.batched(images_names, batch_size=batch_size):
+                        im_names_batch = []
+                        img_pathes_batch = []
+                        for image_name in images_names_batch:
+                            img_pathes_batch.append(os.path.join(curr_images_path, image_name))
+                            im_names_batch.append(folder + "_" + image_name)
+
+                        img_infos = api.image.upload_paths(
+                            dataset.id, im_names_batch, img_pathes_batch
+                        )
+                        img_ids = [im_info.id for im_info in img_infos]
+
+                        anns = [create_ann(image_path) for image_path in img_pathes_batch]
+                        api.annotation.upload_anns(img_ids, anns)
+
+                        progress.iters_done_report(len(images_names_batch))
+
     return project
