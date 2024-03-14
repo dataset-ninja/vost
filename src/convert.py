@@ -45,7 +45,14 @@ def convert_and_upload_supervisely_project(
 
         mask_path = image_path.replace("JPEGImages", "Annotations").replace(".jpg", ".png")
 
-        seq_id, action_val, class_name = image_path.split("/")[-2].split("_")
+        split_path_data = image_path.split("/")[-2].split("_")
+
+        seq_id = split_path_data[0]
+        action_val = split_path_data[1]
+        # class_name = ("_").join(split_path_data[2:])
+        class_name = image_path.split("/")[-2].split("_")[-1]
+
+        # seq_id, action_val, class_name = image_path.split("/")[-2].split("_")
 
         action = sly.Tag(action_meta, value=action_val)
         seq = sly.Tag(seq_meta, value=int(seq_id))
