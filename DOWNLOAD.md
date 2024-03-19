@@ -1,6 +1,6 @@
 Dataset **VOST** can be downloaded in [Supervisely format](https://developer.supervisely.com/api-references/supervisely-annotation-json-format):
 
- [Download](Set 'HIDE_DATASET=False' to generate download link)
+ [Download](https://assets.supervisely.com/supervisely-supervisely-assets-public/teams_storage/B/c/s4/A8CYlDE9YX4EeH96roVUYR3oAmLpm8ic8bBl0n2hXsqhvsKm7OoA06ZPd56pMQsY7Otxd2gV2jZ7midpqhEjBhNK6OKJo2j0BP0WQ19ztVzOR6g2vwloLezz9pye.tar)
 
 As an alternative, it can be downloaded with *dataset-tools* package:
 ``` bash
