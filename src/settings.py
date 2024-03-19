@@ -25,6 +25,7 @@ APPLICATIONS: List[Union[Industry, Domain, Research]] = [Domain.General(), Indus
 CATEGORY: Category = Category.General(extra=Category.Food())
 
 CV_TASKS: List[CVTask] = [
+    CVTask.InstanceSegmentation(),
     CVTask.SemanticSegmentation(),
     CVTask.ObjectDetection(),
     CVTask.Identification(),
@@ -88,7 +89,7 @@ TAGS: Optional[
             "egocentric",
         ]
     ]
-] = None
+] = ["egocentric", "video-object-segmentation", "transformations"]
 
 
 SECTION_EXPLORE_CUSTOM_DATASETS: Optional[List[str]] = None
